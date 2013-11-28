@@ -12,6 +12,7 @@ use yii\base\InvalidConfigException;
 use yii\base\Model;
 use yii\base\InvalidParamException;
 use yii\base\ModelEvent;
+use yii\base\NotSupportedException;
 use yii\base\UnknownMethodException;
 use yii\base\InvalidCallException;
 use yii\helpers\StringHelper;
@@ -39,60 +40,90 @@ use yii\helpers\Inflector;
  * @author Carsten Brandt <mail@cebe.cc>
  * @since 2.0
  */
-class ActiveRecord extends BaseActiveRecord
+abstract class BaseActiveRecord extends Model implements ActiveRecordInterface
 {
 	/**
-	 * The insert operation. This is mainly used when overriding [[transactions()]] to specify which operations are transactional.
+	 * @event Event an event that is triggered when the record is initialized via [[init()]].
 	 */
-	const OP_INSERT = 0x01;
+	const EVENT_INIT = 'init';
 	/**
-	 * The update operation. This is mainly used when overriding [[transactions()]] to specify which operations are transactional.
+	 * @event Event an event that is triggered after the record is created and populated with query result.
 	 */
-	const OP_UPDATE = 0x02;
+	const EVENT_AFTER_FIND = 'afterFind';
 	/**
-	 * The delete operation. This is mainly used when overriding [[transactions()]] to specify which operations are transactional.
+	 * @event ModelEvent an event that is triggered before inserting a record.
+	 * You may set [[ModelEvent::isValid]] to be false to stop the insertion.
 	 */
-	const OP_DELETE = 0x04;
+	const EVENT_BEFORE_INSERT = 'beforeInsert';
 	/**
-	 * All three operations: insert, update, delete.
-	 * This is a shortcut of the expression: OP_INSERT | OP_UPDATE | OP_DELETE.
+	 * @event Event an event that is triggered after a record is inserted.
 	 */
-	const OP_ALL = 0x07;
+	const EVENT_AFTER_INSERT = 'afterInsert';
+	/**
+	 * @event ModelEvent an event that is triggered before updating a record.
+	 * You may set [[ModelEvent::isValid]] to be false to stop the update.
+	 */
+	const EVENT_BEFORE_UPDATE = 'beforeUpdate';
+	/**
+	 * @event Event an event that is triggered after a record is updated.
+	 */
+	const EVENT_AFTER_UPDATE = 'afterUpdate';
+	/**
+	 * @event ModelEvent an event that is triggered before deleting a record.
+	 * You may set [[ModelEvent::isValid]] to be false to stop the deletion.
+	 */
+	const EVENT_BEFORE_DELETE = 'beforeDelete';
+	/**
+	 * @event Event an event that is triggered after a record is deleted.
+	 */
+	const EVENT_AFTER_DELETE = 'afterDelete';
 
 	/**
-	 * Returns the database connection used by this AR class.
-	 * By default, the "db" application component is used as the database connection.
-	 * You may override this method if you want to use a different database connection.
-	 * @return Connection the database connection used by this AR class.
+	 * @var array attribute values indexed by attribute names
 	 */
-//	public static function getDb()
-//	{
-//		return \Yii::$app->getDb(); TODO wtf?
-//	}
+	private $_attributes = [];
+	/**
+	 * @var array old attribute values indexed by attribute names.
+	 */
+	private $_oldAttributes;
+	/**
+	 * @var array related models indexed by the relation names
+	 */
+	private $_related = [];
 
 	/**
-	 * Creates an [[ActiveQuery]] instance with a given SQL statement.
+	 * Creates an [[ActiveQuery]] instance for query purpose.
 	 *
-	 * Note that because the SQL statement is already specified, calling additional
-	 * query modification methods (such as `where()`, `order()`) on the created [[ActiveQuery]]
-	 * instance will have no effect. However, calling `with()`, `asArray()` or `indexBy()` is
-	 * still fine.
+	 * @include @yii/db/ActiveRecord-find.md
 	 *
-	 * Below is an example:
+	 * @param mixed $q the query parameter. This can be one of the followings:
 	 *
-	 * ~~~
-	 * $customers = Customer::findBySql('SELECT * FROM tbl_customer')->all();
-	 * ~~~
+	 *  - a scalar value (integer or string): query by a single primary key value and return the
+	 *    corresponding record.
+	 *  - an array of name-value pairs: query by a set of column values and return a single record matching all of them.
+	 *  - null: return a new [[ActiveQuery]] object for further query purpose.
 	 *
-	 * @param string $sql the SQL statement to be executed
-	 * @param array $params parameters to be bound to the SQL statement during execution.
-	 * @return ActiveQuery the newly created [[ActiveQuery]] instance
+	 * @return ActiveQuery|ActiveRecord|null When `$q` is null, a new [[ActiveQuery]] instance
+	 * is returned; when `$q` is a scalar or an array, an ActiveRecord object matching it will be
+	 * returned (null will be returned if there is no matching).
+	 * @throws InvalidConfigException if the AR class does not have a primary key
+	 * @see createQuery()
 	 */
-	public static function findBySql($sql, $params = [])
+	public static function find($q = null)
 	{
 		$query = static::createQuery();
-		$query->sql = $sql;
-		return $query->params($params);
+		if (is_array($q)) {
+			return $query->where($q)->one();
+		} elseif ($q !== null) {
+			// query by primary key
+			$primaryKey = static::primaryKey();
+			if (isset($primaryKey[0])) {
+				return $query->where([$primaryKey[0] => $q])->one();
+			} else {
+				throw new InvalidConfigException(get_called_class() . ' must have a primary key.');
+			}
+		}
+		return $query;
 	}
 
 	/**
@@ -109,12 +140,10 @@ class ActiveRecord extends BaseActiveRecord
 	 * @param array $params the parameters (name => value) to be bound to the query.
 	 * @return integer the number of rows updated
 	 */
-//	public static function updateAll($attributes, $condition = '', $params = [])
-//	{
-//		$command = static::getDb()->createCommand();
-//		$command->update(static::tableName(), $attributes, $condition, $params);
-//		return $command->execute();
-//	}
+	public static function updateAll($attributes, $condition = '')
+	{
+		throw new NotSupportedException(__METHOD__ . ' is not supported.');
+	}
 
 	/**
 	 * Updates the whole table using the provided counter changes and conditions.
@@ -132,16 +161,9 @@ class ActiveRecord extends BaseActiveRecord
 	 * Do not name the parameters as `:bp0`, `:bp1`, etc., because they are used internally by this method.
 	 * @return integer the number of rows updated
 	 */
-	public static function updateAllCounters($counters, $condition = '', $params = [])
+	public static function updateAllCounters($counters, $condition = '')
 	{
-		$n = 0;
-		foreach ($counters as $name => $value) {
-			$counters[$name] = new Expression("[[$name]]+:bp{$n}", [":bp{$n}" => $value]);
-			$n++;
-		}
-		$command = static::getDb()->createCommand();
-		$command->update(static::tableName(), $counters, $condition, $params);
-		return $command->execute();
+		throw new NotSupportedException(__METHOD__ . ' is not supported.');
 	}
 
 	/**
